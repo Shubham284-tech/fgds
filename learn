@@ -1,0 +1,58 @@
+
+aws cli aws --version
+java
+dynamodb locally
+saving data locally in db folder
+download nosql workbench amazon db
+
+aws configure
+AWS Access Key ID: "fakeMyKeyId" 
+AWS Secret Access Key: "fakeSecretAccessKey"
+Default Region Name: "fakeRegion"
+
+
+
+aws dynamodb list-tables --endpoint-url http://localhost:8000
+
+
+
+setup dynamodb: =>
+
+java runtime first
+
+dynamodb local download 1:20
+zip
+extract dynamodb-local
+
+copy as path
+
+java -Djava.library.path url terminal
+
+
+
+
+
+\
+
+
+setup backend
+
+
+
+
+    "build": "rimraf dist && npx tsc && cpx \"src/seed/data/**/*\" dist/seed/data",
+
+
+
+
+to run 
+
+
+ java -Djava.library.path="C:\Users\Dell\Downloads\dynamodb_local\DynamoDBLocal_lib" -jar "C:\Users\Dell\Downloads\dynamodb_local\DynamoDBLocal.jar" -sharedDb -dbPath "C:\Users\Dell\Desktop\pitch-backend\db"
+
+
+npm run dev
+npm run seed
+
+
+cybercrime  1930 www.cybercrime.gov.in
