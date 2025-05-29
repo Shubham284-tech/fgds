@@ -17,6 +17,7 @@ import { PollyClient, SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
 
 import { fromEnv } from "@aws-sdk/credential-provider-env";
 import { PassThrough } from "stream";
+
 /* ROUTE IMPORTS */
 import courseRoutes from "./routes/courseRoutes";
 
@@ -26,15 +27,19 @@ const isProduction = process.env.NODE_ENV === "production";
 if (!isProduction) {
   dynamoose.aws.ddb.local();
 }
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 const transcribeClient = new TranscribeStreamingClient({
   region: process.env.AWS_REGION,
   credentials: fromEnv(),
 });
+
 const pollyClient = new PollyClient({
   region: process.env.AWS_REGION,
   credentials: fromEnv(),
 });
+
 const app = express();
 app.use(express.json());
 app.use(helmet());
@@ -44,7 +49,7 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cors());
 
-const server = http.createServer(app); // ⬅ Create HTTP server
+const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*", // Use specific origin in production
@@ -52,98 +57,174 @@ const io = new Server(server, {
   },
 });
 
-/* SOCKET.IO CONNECTION */
+function estimateAudioDurationMs(text: string) {
+  const words = text.split(/\s+/).length;
+  const wordsPerSecond = 2.5; // Rough estimate: 150 wpm
+  return Math.ceil((words / wordsPerSecond) * 1000);
+}
+
+let isProcessing = false;
+const userSessions = new Map();
+
 io.on("connection", (socket) => {
-  console.log("🟢 Client connected: 58", socket.id);
+  console.log("🟢 Client connected:", socket.id);
 
-  socket.on("user_message", async (message) => {
-    console.log("👤 User said:", message);
+  // Init session
+  userSessions.set(socket.id, {
+    messages: [
+      {
+        role: "system",
+        content: `
+You are role-playing as a wealthy, style-conscious 30-year-old woman shopping for high-end wooden furniture. You are speaking to a salesperson (the user), and your job is to EVALUATE their pitch.
 
-    const prompt = `
-You are role-playing as a wealthy, style-conscious 30-year-old woman shopping for luxury wooden furniture. You're speaking to a salesperson.
+YOUR ROLE:
+- You are the BUYER. The user is the SELLER.
+- You do NOT try to sell. You ask questions about what they are selling.
+- Ask ONE question per message.
+- Ask a TOTAL of 5 questions, each on a different topic (design, materials, uniqueness, brand reputation, service, etc).
+- Your tone is elegant, smart, confident, and slightly skeptical.
+- Your questions should be easy to understand and directly related to what the user just said.
 
-GOAL:
-- Ask up to 5 short, varied questions (1 per message).
-- Be sharp, elegant, confident, and slightly skeptical.
-- Prioritize design, exclusivity, craftsmanship, and service — not discounts.
-- Don’t dwell on the same topic.
-- Keep replies concise and forward-moving.
+EXAMPLES OF GOOD QUESTIONS:
+- “What sets your designs apart from other luxury brands?”
+- “Who are your typical clients?”
+- “How do you ensure the wood is sustainably sourced?”
 
-AFTER 5 questions, switch to feedback. As yourself, rate the salesperson’s performance. Include:
+AFTER ASKING 5 QUESTIONS:
+- Once the user has responded to all 5, SWITCH OUT OF CHARACTER.
+- Then provide detailed feedback like this:
 
-- How persuasive was the salesperson?
-- Did they match your luxury standards?
-- Did they answer your questions well?
-- Did they understand your needs?
-- Did they make you feel valued as a customer?
-- What did you like about their approach?
-- What can they improve?
-
-Structure feedback like this:
 **Q1:** [Question you asked]  
-**A1:** [Their answer]  
-...  
-**Feedback:** [Your detailed but concise critique]
+**A1:** [User's answer]  
 
-The salesperson just said: "${message}"
+(repeat for all 5)
 
-Respond now with your next question or feedback.
-`;
+**Feedback:** [Your honest, concise critique, covering persuasiveness, luxury appeal, clarity, understanding your needs, and suggestions to improve.]
+
+Do NOT answer questions. Only ask. Then evaluate.
+`,
+      },
+      {
+        role: "user",
+        content:
+          "Start by asking a sharp, relevant question based on their latest pitch.",
+      },
+    ],
+    questionCount: 0,
+    feedbackGiven: false,
+  });
+
+  socket.on("user_message", async (salespersonMessage) => {
+    console.log("💬 User message:", salespersonMessage);
+
+    const session = userSessions.get(socket.id);
+    if (!session || session.feedbackGiven) {
+      console.log("✅ Feedback already given. Ignoring input.");
+      return;
+    }
+
+    if (isProcessing) {
+      console.log("⏳ Still processing previous response.");
+      return;
+    }
+    isProcessing = true;
+    session.messages.push({ role: "user", content: salespersonMessage });
 
     try {
-      const chatCompletion = await openai.chat.completions.create({
-        model: "gpt-4", // or "gpt-3.5-turbo"
-        messages: [
-          {
-            role: "system",
-            content: prompt,
-            // "You are playing the role of a high-income 30-year-old customer interested in furniture. Be natural and somewhat discerning, but give consent to buying after asking 2-3 ques.",
-          },
-          {
-            role: "user",
-            content:
-              "Start by asking a sharp, relevant question based on their latest pitch.",
-          },
-        ],
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: session.messages,
         temperature: 0.7,
       });
 
-      const gptReply = chatCompletion.choices[0].message.content!;
-      console.log("📤 GPT reply 103:", gptReply);
-      socket.emit("gpt_reply", gptReply);
+      const gptReply = completion.choices[0].message.content!;
+      session.messages.push({ role: "assistant", content: gptReply });
 
-      // Polly TTS
+      // Track number of questions
+      session.questionCount += 1;
+
+      if (session.questionCount >= 5 && !session.feedbackGiven) {
+        // Ask GPT to switch out of character and give feedback
+        session.messages.push({
+          role: "user",
+          content:
+            "Please now switch out of character and provide your detailed feedback as per the system prompt.",
+        });
+
+        const feedbackCompletion = await openai.chat.completions.create({
+          model: "gpt-4",
+          messages: session.messages,
+          temperature: 0.7,
+        });
+
+        const feedback = feedbackCompletion.choices[0].message.content!;
+        session.messages.push({ role: "assistant", content: feedback });
+        socket.emit("gpt_reply", feedback);
+
+        const synthCommand = new SynthesizeSpeechCommand({
+          Text: feedback,
+          OutputFormat: "mp3",
+          VoiceId: "Joanna",
+        });
+
+        const synthResponse = await pollyClient.send(synthCommand);
+        const audioChunks: Buffer[] = [];
+
+        for await (const chunk of synthResponse.AudioStream as any) {
+          audioChunks.push(chunk);
+        }
+
+        const audioBuffer = Buffer.concat(audioChunks);
+        const base64Audio = audioBuffer.toString("base64");
+
+        socket.emit("gpt_audio", base64Audio);
+
+        session.feedbackGiven = true;
+        isProcessing = false;
+        return;
+      }
+
+      socket.emit("gpt_reply", gptReply);
+      console.log("🤖 GPT reply:", gptReply);
+      socket.emit("pause_transcription");
+
       const synthCommand = new SynthesizeSpeechCommand({
         Text: gptReply,
         OutputFormat: "mp3",
-        VoiceId: "Joey",
+        VoiceId: "Joanna",
       });
 
       const synthResponse = await pollyClient.send(synthCommand);
-
       const audioChunks: Buffer[] = [];
+
       for await (const chunk of synthResponse.AudioStream as any) {
         audioChunks.push(chunk);
       }
 
       const audioBuffer = Buffer.concat(audioChunks);
       const base64Audio = audioBuffer.toString("base64");
-      console.log("audio chatgpt 125");
+
+      const delay = estimateAudioDurationMs(gptReply);
+      setTimeout(() => {
+        socket.emit("resume_transcription");
+        isProcessing = false;
+      }, delay);
 
       socket.emit("gpt_audio", base64Audio);
-    } catch (error) {
-      console.error("❌ Error with OpenAI:", error);
+    } catch (err) {
+      console.error("❌ OpenAI error:", err);
       socket.emit(
         "gpt_reply",
         "⚠️ Sorry, there was an issue generating a response."
       );
+      isProcessing = false;
     }
   });
 
   let audioStream: PassThrough;
 
   socket.on("start_transcription", async () => {
-    console.log("🎙️ Transcription started 138");
+    console.log("🎙️ Transcription started");
     audioStream = new PassThrough();
 
     const audioIterable = (async function* () {
@@ -172,7 +253,6 @@ Respond now with your next question or feedback.
         if (results?.length && results[0].Alternatives?.length) {
           const transcript = results[0].Alternatives[0].Transcript;
           if (!results[0].IsPartial) {
-            console.log("📝 audio Transcript 167:", transcript);
             socket.emit("transcription", transcript);
           }
         }
@@ -190,14 +270,15 @@ Respond now with your next question or feedback.
   });
 
   socket.on("stop_transcription", () => {
-    console.log("🛑 Transcription stopped 185");
+    console.log("🛑 Transcription stopped");
     if (audioStream) {
       audioStream.end();
     }
   });
 
   socket.on("disconnect", () => {
-    console.log("🔴 Client disconnected 192:", socket.id);
+    console.log("🔴 Client disconnected:", socket.id);
+    userSessions.delete(socket.id);
   });
 });
 
@@ -211,8 +292,6 @@ app.use("/courses", courseRoutes);
 const port = process.env.PORT || 3000;
 if (!isProduction) {
   server.listen(port, () => {
-    console.log(
-      `🚀 Server with Socket.IO running shubh on http://localhost:${port}`
-    );
+    console.log(`🚀 Server with Socket.IO running on http://localhost:${port}`);
   });
 }
