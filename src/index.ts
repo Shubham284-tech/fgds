@@ -94,10 +94,6 @@ AFTER ASKING 5 QUESTIONS:
 - Once the user has responded to all 5, SWITCH OUT OF CHARACTER.
 - Then provide detailed feedback like this:
 
-**Q1:** [Question you asked]  
-**A1:** [User's answer]  
-
-(repeat for all 5)
 
 **Feedback:** [Your honest, concise critique, covering persuasiveness, luxury appeal, clarity, understanding your needs, and suggestions to improve.]
 
@@ -106,8 +102,7 @@ Do NOT answer questions. Only ask. Then evaluate.
       },
       {
         role: "user",
-        content:
-          "Start by asking a sharp, relevant question based on their latest pitch.",
+        content: "Start by trying to sell some piece of furniture",
       },
     ],
     questionCount: 0,
@@ -143,7 +138,7 @@ Do NOT answer questions. Only ask. Then evaluate.
       // Track number of questions
       session.questionCount += 1;
 
-      if (session.questionCount >= 5 && !session.feedbackGiven) {
+      if (session.questionCount >= 6 && !session.feedbackGiven) {
         // Ask GPT to switch out of character and give feedback
         session.messages.push({
           role: "user",
