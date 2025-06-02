@@ -69,46 +69,61 @@ const userSessions = new Map();
 io.on("connection", (socket) => {
   console.log("🟢 Client connected:", socket.id);
 
-  // Init session
-  userSessions.set(socket.id, {
-    messages: [
-      {
-        role: "system",
-        content: `
-You are role-playing as a wealthy, style-conscious 30-year-old woman shopping for high-end wooden furniture. You are speaking to a salesperson (the user), and your job is to EVALUATE their pitch.
+  socket.on("start_session", (data) => {
+    const { industry, product, b2c, b2b, targetBuyer } = data;
+    console.log(data, "should have what you need");
+    const isB2B = targetBuyer === "b2b";
+    const systemPrompt = `
+You are role-playing as a potential ${
+      isB2B ? "business" : "consumer"
+    } buyer in a virtual mock sales conversation roleplay. The user is practicing their sales pitch. Your role and behavior should reflect a realistic customer.
+NOTE: The user's responses are transcribed from speech using an automated system and may contain minor transcription errors. Be tolerant of small mistakes, and use context to interpret meaning where necessary. Avoid over-correcting or responding to transcription artifacts.
+    YOUR PROFILE:
+- ${
+      isB2B
+        ? `You are playing the role of the buyer, ${b2b.persona} working in the ${b2b.industry} industry. ${b2b.other_info}.`
+        : `You are a ${b2c.customer} ${b2c.age}-year-old ${b2c.gender} consumer from the ${b2c.income} income bracket. You're particularly motivated by: ${b2c.motivation}.`
+    }
+- The product being pitched is: **${product}**
+- Industry context: **${industry}**
+- Difficulty level: ${isB2B ? b2b.difficulty : b2c.difficulty} (act accordingly)
 
-YOUR ROLE:
-- You are the BUYER. The user is the SELLER.
-- You do NOT try to sell. You ask questions about what they are selling.
-- Ask ONE question per message.
-- Ask a TOTAL of 5 questions, each on a different topic (design, materials, uniqueness, brand reputation, service, etc).
-- Your tone is elegant, smart, confident, and slightly skeptical.
-- Your questions should be easy to understand and directly related to what the user just said.
-
-EXAMPLES OF GOOD QUESTIONS:
-- “What sets your designs apart from other luxury brands?”
-- “Who are your typical clients?”
-- “How do you ensure the wood is sustainably sourced?”
+YOUR BEHAVIOR:
+- Speak as a smart, confident, slightly skeptical ${
+      isB2B ? "executive" : "customer"
+    }.
+- Ask ONE thoughtful question per message.
+- Focus on different topics across the conversation: product uniqueness, design, brand reputation, quality, safety, durability, service, etc.
+- Tailor your tone and questions to reflect the persona and buying motivation.
+- Do NOT provide feedback early. Do NOT answer questions.
+- Do NOT sell or promote anything.
 
 AFTER ASKING 5 QUESTIONS:
-- Once the user has responded to all 5, SWITCH OUT OF CHARACTER.
-- Then provide detailed feedback like this:
+- Switch out of character.
+- Provide detailed, structured feedback covering:
+  - Persuasiveness of the salesperson
+  - Clarity and professionalism
+  - Relevance to your needs/motivation
+  - Suggestions to improve the pitch
 
+EXAMPLES OF GOOD QUESTIONS:
+- “What makes your product stand out from similar options?”
+- “Can you walk me through how this ensures durability?”
+- “Who typically uses this product and why?”
 
-**Feedback:** [Your honest, concise critique, covering persuasiveness, luxury appeal, clarity, understanding your needs, and suggestions to improve.]
+Stay in character until the final feedback. Be authentic, precise, and challenging.`;
 
-Do NOT answer questions. Only ask. Then evaluate.
-`,
-      },
-      {
-        role: "user",
-        content: "Start by trying to sell some piece of furniture",
-      },
-    ],
-    questionCount: 0,
-    feedbackGiven: false,
+    userSessions.set(socket.id, {
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "Start by trying to sell your product." },
+      ],
+      questionCount: 0,
+      feedbackGiven: false,
+    });
+
+    console.log("🧠 Session initialized for", socket.id);
   });
-
   socket.on("user_message", async (salespersonMessage) => {
     console.log("💬 User message:", salespersonMessage);
 
