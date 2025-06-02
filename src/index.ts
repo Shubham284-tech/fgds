@@ -63,7 +63,6 @@ function estimateAudioDurationMs(text: string) {
   return Math.ceil((words / wordsPerSecond) * 1000);
 }
 
-let isProcessing = false;
 const userSessions = new Map();
 
 io.on("connection", (socket) => {
@@ -71,47 +70,62 @@ io.on("connection", (socket) => {
 
   socket.on("start_session", (data) => {
     const { industry, product, b2c, b2b, targetBuyer } = data;
-    console.log(data, "should have what you need");
     const isB2B = targetBuyer === "b2b";
-    const systemPrompt = `
-You are role-playing as a potential ${
-      isB2B ? "business" : "consumer"
-    } buyer in a virtual mock sales conversation roleplay. The user is practicing their sales pitch. Your role and behavior should reflect a realistic customer.
-NOTE: The user's responses are transcribed from speech using an automated system and may contain minor transcription errors. Be tolerant of small mistakes, and use context to interpret meaning where necessary. Avoid over-correcting or responding to transcription artifacts.
-    YOUR PROFILE:
-- ${
+
+    const systemPrompt = `You are participating in a virtual ${
+      isB2B ? "B2B" : "B2C"
+    } sales roleplay.
+    This is a ${"first time"} ${"offline"} meeting.
+    ${
       isB2B
-        ? `You are playing the role of the buyer, ${b2b.persona} working in the ${b2b.industry} industry. ${b2b.other_info}.`
-        : `You are a ${b2c.customer} ${b2c.age}-year-old ${b2c.gender} consumer from the ${b2c.income} income bracket. You're particularly motivated by: ${b2c.motivation}.`
+        ? `You are playing the role of the buyer, who is/are ${
+            b2b.persona
+          } at a/an ${b2b.industry} company.
+     I am a salesperson at a ${b2b.industry} company selling ${product}
+     ${
+       b2b.difficulty === "easy"
+         ? `As the prospect you are receptive and cooperative.
+          You reveal your pain points right away, making it easy to address your needs.
+          Your objections are minimal and simple, providing a low-stress role-play experience.`
+         : b2b.difficulty === "medium"
+         ? `As the prospect you are neutral and cautious.
+            You do not reveal your pain points upfront, instead framing the conversation as “shopping around” or “just ensuring you have the best options.”
+            You provide decent pushback in the form of a couple of common objections, requiring the seller to navigate the conversation skillfully.`
+         : `As the prospect you are challenging and resistant think of someone extremely skeptical (but still professional).
+            You safeguard your pain points, requiring the seller to actively drag it out of you through probing questions and rapport-building.
+            You provide multiple objections and may include a bit of snark or attitude while maintaining professionalism, testing the seller’s ability to remain composed and persuasive.`
+     }`
+        : ` You are playing the role of the ${b2c.customer} buyer aged ${
+            b2c.age
+          } with ${b2c.income} income group with focus on ${b2c.motivation}, 
+    I am a salesperson at a ${industry} company selling ${product}
+    
+     ${
+       b2c.difficulty === "easy"
+         ? `As the prospect you are receptive and cooperative.
+          You reveal your pain points right away, making it easy to address your needs.
+          Your objections are minimal and simple, providing a low-stress role-play experience.`
+         : b2b.difficulty === "medium"
+         ? `As the prospect you are neutral and cautious.
+            You do not reveal your pain points upfront, instead framing the conversation as “shopping around” or “just ensuring you have the best options.”
+            You provide decent pushback in the form of a couple of common objections, requiring the seller to navigate the conversation skillfully.`
+         : `As the prospect you are challenging and resistant think of someone extremely skeptical (but still professional).
+            You safeguard your pain points, requiring the seller to actively drag it out of you through probing questions and rapport-building.
+            You provide multiple objections and may include a bit of snark or attitude while maintaining professionalism, testing the seller’s ability to remain composed and persuasive.`
+     }
+    `
     }
-- The product being pitched is: **${product}**
-- Industry context: **${industry}**
-- Difficulty level: ${isB2B ? b2b.difficulty : b2c.difficulty} (act accordingly)
 
-YOUR BEHAVIOR:
-- Speak as a smart, confident, slightly skeptical ${
-      isB2B ? "executive" : "customer"
-    }.
-- Ask ONE thoughtful question per message.
-- Focus on different topics across the conversation: product uniqueness, design, brand reputation, quality, safety, durability, service, etc.
-- Tailor your tone and questions to reflect the persona and buying motivation.
-- Do NOT provide feedback early. Do NOT answer questions.
-- Do NOT sell or promote anything.
-
-AFTER ASKING 5 QUESTIONS:
-- Switch out of character.
-- Provide detailed, structured feedback covering:
-  - Persuasiveness of the salesperson
-  - Clarity and professionalism
-  - Relevance to your needs/motivation
-  - Suggestions to improve the pitch
-
-EXAMPLES OF GOOD QUESTIONS:
-- “What makes your product stand out from similar options?”
-- “Can you walk me through how this ensures durability?”
-- “Who typically uses this product and why?”
-
-Stay in character until the final feedback. Be authentic, precise, and challenging.`;
+    YOUR BEHAVIOR:
+    - Engage with me in a realistic way.
+    -Respond as a buyer till all 5 questions have been asked then-
+    -When that happens, switch to a professional B2C sales coach.
+    -As a coach, analyze the entire conversation and provide feedback:
+    -5 things done well (with keywords + explanation)
+    -5 areas to improve (with keywords + explanation)
+    -Final score out of 10 with justification
+    -Tangible tips to improve future performance
+    `;
 
     userSessions.set(socket.id, {
       messages: [
@@ -120,9 +134,8 @@ Stay in character until the final feedback. Be authentic, precise, and challengi
       ],
       questionCount: 0,
       feedbackGiven: false,
+      isProcessing: false,
     });
-
-    console.log("🧠 Session initialized for", socket.id);
   });
   socket.on("user_message", async (salespersonMessage) => {
     console.log("💬 User message:", salespersonMessage);
@@ -133,11 +146,11 @@ Stay in character until the final feedback. Be authentic, precise, and challengi
       return;
     }
 
-    if (isProcessing) {
+    if (session.isProcessing) {
       console.log("⏳ Still processing previous response.");
       return;
     }
-    isProcessing = true;
+    session.isProcessing = true;
     session.messages.push({ role: "user", content: salespersonMessage });
 
     try {
@@ -175,6 +188,7 @@ Stay in character until the final feedback. Be authentic, precise, and challengi
           Text: feedback,
           OutputFormat: "mp3",
           VoiceId: "Joanna",
+          Engine: "neural",
         });
 
         const synthResponse = await pollyClient.send(synthCommand);
@@ -190,7 +204,7 @@ Stay in character until the final feedback. Be authentic, precise, and challengi
         socket.emit("gpt_audio", base64Audio);
 
         session.feedbackGiven = true;
-        isProcessing = false;
+        session.isProcessing = false;
         return;
       }
 
@@ -217,7 +231,7 @@ Stay in character until the final feedback. Be authentic, precise, and challengi
       const delay = estimateAudioDurationMs(gptReply);
       setTimeout(() => {
         socket.emit("resume_transcription");
-        isProcessing = false;
+        session.isProcessing = false;
       }, delay);
 
       socket.emit("gpt_audio", base64Audio);
@@ -227,7 +241,7 @@ Stay in character until the final feedback. Be authentic, precise, and challengi
         "gpt_reply",
         "⚠️ Sorry, there was an issue generating a response."
       );
-      isProcessing = false;
+      session.isProcessing = false;
     }
   });
 
