@@ -118,8 +118,8 @@ io.on("connection", (socket) => {
 
     YOUR BEHAVIOR:
     - Engage with me in a realistic way.
-    -Respond as a buyer till all 5 questions have been asked then-
-    -When that happens, switch to a professional B2C sales coach.
+    -Respond as a buyer till user asks for feedback. Once he asks for feedback then When that happens, analyze the entire conversation and provide feedback in the following format 
+    - switch to a professional ${isB2B ? "B2B" : "B2C"} sales coach.
     -As a coach, analyze the entire conversation and provide feedback:
     -5 things done well (with keywords + explanation)
     -5 areas to improve (with keywords + explanation)
@@ -127,19 +127,18 @@ io.on("connection", (socket) => {
     -Tangible tips to improve future performance
     `;
 
+    const userPrompt = `Hi, thanks for taking the time to meet today. I’d love to learn more about your needs and see if our ${product} might be a good fit.`;
+
     userSessions.set(socket.id, {
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: "Start by trying to sell your product." },
+        { role: "user", content: userPrompt },
       ],
-      questionCount: 0,
       feedbackGiven: false,
       isProcessing: false,
     });
   });
   socket.on("user_message", async (salespersonMessage) => {
-    console.log("💬 User message:", salespersonMessage);
-
     const session = userSessions.get(socket.id);
     if (!session || session.feedbackGiven) {
       console.log("✅ Feedback already given. Ignoring input.");
@@ -150,6 +149,8 @@ io.on("connection", (socket) => {
       console.log("⏳ Still processing previous response.");
       return;
     }
+    console.log("💬 User message:", salespersonMessage);
+
     session.isProcessing = true;
     session.messages.push({ role: "user", content: salespersonMessage });
 
@@ -163,51 +164,6 @@ io.on("connection", (socket) => {
       const gptReply = completion.choices[0].message.content!;
       session.messages.push({ role: "assistant", content: gptReply });
 
-      // Track number of questions
-      session.questionCount += 1;
-
-      if (session.questionCount >= 6 && !session.feedbackGiven) {
-        // Ask GPT to switch out of character and give feedback
-        session.messages.push({
-          role: "user",
-          content:
-            "Please now switch out of character and provide your detailed feedback as per the system prompt.",
-        });
-
-        const feedbackCompletion = await openai.chat.completions.create({
-          model: "gpt-4",
-          messages: session.messages,
-          temperature: 0.7,
-        });
-
-        const feedback = feedbackCompletion.choices[0].message.content!;
-        session.messages.push({ role: "assistant", content: feedback });
-        socket.emit("gpt_reply", feedback);
-
-        const synthCommand = new SynthesizeSpeechCommand({
-          Text: feedback,
-          OutputFormat: "mp3",
-          VoiceId: "Joanna",
-          Engine: "neural",
-        });
-
-        const synthResponse = await pollyClient.send(synthCommand);
-        const audioChunks: Buffer[] = [];
-
-        for await (const chunk of synthResponse.AudioStream as any) {
-          audioChunks.push(chunk);
-        }
-
-        const audioBuffer = Buffer.concat(audioChunks);
-        const base64Audio = audioBuffer.toString("base64");
-
-        socket.emit("gpt_audio", base64Audio);
-
-        session.feedbackGiven = true;
-        session.isProcessing = false;
-        return;
-      }
-
       socket.emit("gpt_reply", gptReply);
       console.log("🤖 GPT reply:", gptReply);
       socket.emit("pause_transcription");
@@ -215,7 +171,8 @@ io.on("connection", (socket) => {
       const synthCommand = new SynthesizeSpeechCommand({
         Text: gptReply,
         OutputFormat: "mp3",
-        VoiceId: "Joanna",
+        VoiceId: "Ruth",
+        Engine: "generative",
       });
 
       const synthResponse = await pollyClient.send(synthCommand);
@@ -293,10 +250,61 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("stop_transcription", () => {
+  socket.on("stop_transcription", async () => {
     console.log("🛑 Transcription stopped");
+    socket.emit("pause_transcription");
     if (audioStream) {
       audioStream.end();
+    }
+    const session = userSessions.get(socket.id);
+    if (!session || session.feedbackGiven) {
+      console.log("wapsiii");
+      return;
+    }
+
+    try {
+      session.messages.push({
+        role: "user",
+        content:
+          "Please now switch out of character and provide your detailed feedback as per the system prompt.",
+      });
+      const feedbackCompletion = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: session.messages,
+        temperature: 0.7,
+      });
+
+      const feedback = feedbackCompletion.choices[0].message.content!;
+      session.messages.push({ role: "assistant", content: feedback });
+      socket.emit("gpt_reply", feedback);
+      console.log(feedback, "feedbackfeedback");
+      // const synthCommand = new SynthesizeSpeechCommand({
+      //   Text: feedback,
+      //   OutputFormat: "mp3",
+      //   VoiceId: "Ruth",
+      //   Engine: "generative",
+      // });
+
+      // const synthResponse = await pollyClient.send(synthCommand);
+      // const audioChunks: Buffer[] = [];
+
+      // for await (const chunk of synthResponse.AudioStream as any) {
+      //   audioChunks.push(chunk);
+      // }
+
+      // const audioBuffer = Buffer.concat(audioChunks);
+      // const base64Audio = audioBuffer.toString("base64");
+      // console.log("sun paara hoon main");
+      // socket.emit("gpt_audio", base64Audio);
+      setTimeout(() => {
+        socket.disconnect(true);
+      }, 2000);
+      session.feedbackGiven = true;
+      session.isProcessing = false;
+    } catch (err) {
+      console.error("❌ Feedback generation error:", err);
+      socket.emit("gpt_reply", "⚠️ Failed to generate feedback.");
+      session.isProcessing = false;
     }
   });
 
