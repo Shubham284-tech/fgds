@@ -168,21 +168,32 @@ io.on("connection", (socket) => {
       console.log("🤖 GPT reply:", gptReply);
       socket.emit("pause_transcription");
 
-      const synthCommand = new SynthesizeSpeechCommand({
-        Text: gptReply,
-        OutputFormat: "mp3",
-        VoiceId: "Ruth",
-        Engine: "generative",
+      // const synthCommand = new SynthesizeSpeechCommand({
+      //   Text: gptReply,
+      //   OutputFormat: "mp3",
+      //   VoiceId: "Ruth",
+      //   Engine: "generative",
+      // });
+
+      // const synthResponse = await pollyClient.send(synthCommand);
+      // const audioChunks: Buffer[] = [];
+
+      // for await (const chunk of synthResponse.AudioStream as any) {
+      //   audioChunks.push(chunk);
+      // }
+
+      // const audioBuffer = Buffer.concat(audioChunks);
+      // const base64Audio = audioBuffer.toString("base64");
+
+      const audioResponse = await openai.audio.speech.create({
+        model: "gpt-4o-mini-tts", // or "tts-1-hd" "tts-1" "gpt-4o-mini-tts"
+        voice: "shimmer", // or try "onyx", "nova", "coral" etc. "alloy", "echo", "fable", "onyx", "nova", "shimmer"
+        input: gptReply,
+        instructions: "Speak in a cheerful and positive tone.",
+        //  response_format: "wav",
       });
-
-      const synthResponse = await pollyClient.send(synthCommand);
-      const audioChunks: Buffer[] = [];
-
-      for await (const chunk of synthResponse.AudioStream as any) {
-        audioChunks.push(chunk);
-      }
-
-      const audioBuffer = Buffer.concat(audioChunks);
+      // For the fastest response times, we recommend using wav or pcm as the response format.
+      const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
       const base64Audio = audioBuffer.toString("base64");
 
       const delay = estimateAudioDurationMs(gptReply);
